@@ -20,7 +20,6 @@ ChronoAlert，这是一个轻量、安全、自托管的 Telegram 定时提醒�
 1.  **Cloudflare 账户：** 用于托管 Worker 和 KV 存储。
 2.  **Telegram Bot Token：** 通过 BotFather 创建您的机器人并获取 Token。
 3.  **您的 Chat ID：** 您用于接收提醒的 Telegram 用户或群组 ID。（可以通过向 [userinfobot](https://t.me/userinfobot) 发消息获取）。
-4.  **最终代码：** 本次对话中为您提供的最终版本代码。
 
 ## 🚀 部署指南
 
@@ -31,7 +30,7 @@ ChronoAlert，这是一个轻量、安全、自托管的 Telegram 定时提醒�
 ### 步骤 2: 创建并配置 Worker
 
 1.  创建一个新的 Worker 服务。
-2.  将本次对话中为您提供的**最终代码**粘贴到 Worker 的代码编辑器中。
+2.  将worker.js中的**代码**粘贴到 Worker 的代码编辑器中。
 3.  进入 Worker 的 **设置 (Settings)** -\> **变量 (Variables)** 页面进行配置：
 
 #### 2.1 环境变量 (Environment Variables)
@@ -55,7 +54,7 @@ ChronoAlert，这是一个轻量、安全、自托管的 Telegram 定时提醒�
 
 ### 步骤 4: 设置 Webhook
 
-将 Telegram Webhook 指向您的 Worker 的 URL，以确保您的 Worker 能实时接收 Telegram 消息。
+将 Telegram Webhook 指向您的 Worker 的 URL，以确保 Worker 能实时接收 Telegram 消息。
 
 请使用以下格式设置 Webhook，确保将 `[BOT_TOKEN]` 和 `[WORKER_URL]` 替换为您的实际值：
 
@@ -89,3 +88,6 @@ https://api.telegram.org/bot[BOT_TOKEN]/setWebhook?url=[WORKER_URL]/webhook
 | **1** | `2026-11-09 12:30 服务器续费` | **单次**：完整日期时间。 |
 | **2** | `11-09 12:30 抢购时间` | **单次**：月日时分，年份默认为当前年份。 |
 | **3** | `12:30 每日午休提醒` | **单次**：时分，日期默认为今天。 |
+
+
+
