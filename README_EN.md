@@ -30,7 +30,7 @@ In your Cloudflare dashboard, create a new KV Namespace. We recommend naming it 
 ### Step 2: Configure and Deploy the Worker
 
 1.  Create a new Worker Service.
-2.  Paste the **final code** from our conversation into the Worker editor.
+2.  Paste the ** code** into the Worker editor.
 3.  Navigate to the Worker's **Settings** -\> **Variables** page for configuration.
 
 #### 2.1 Environment Variables
