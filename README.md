@@ -16,4 +16,6 @@
 
 5. Telegram-Timer——在telegram上搭建定时器bot，配合设置telegram内置代理实现及时接收定时提示
 
-6. ...
+6. Travel-Planner——用于直观的进行旅行规划，并支持到处markdown格式的规划书
+
+7.... 
