@@ -6,8 +6,8 @@ const HTML_TEMPLATE = `
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>旅行规划师 - 完美版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>旅行规划师</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         :root {
@@ -16,10 +16,11 @@ const HTML_TEMPLATE = `
             --radius: 16px; --radius-sm: 8px;
             --text-main: #1f2937; --text-light: #6b7280;
         }
+        
         body { 
             background-color: var(--bg); color: var(--text-main);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            margin: 0; display: flex; height: 100vh; overflow: hidden;
+            margin: 0; display: flex; height: 100dvh; overflow: hidden;
         }
         
         #sidebar { 
@@ -30,11 +31,39 @@ const HTML_TEMPLATE = `
             z-index: 1000;
         }
         
-        #map { 
-            flex: 1; margin: 15px 15px 15px 0; border-radius: var(--radius); 
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); z-index: 1;
+        #map-container {
+            flex: 1; position: relative; margin: 15px 15px 15px 0;
+            border-radius: var(--radius); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); z-index: 1;
         }
+        #map { width: 100%; height: 100%; border-radius: var(--radius); }
         
+        #search-box {
+            position: absolute; top: 15px; right: 15px; z-index: 2000;
+            width: 280px; display: flex; flex-direction: column;
+            background: white; border-radius: var(--radius-sm);
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+        }
+        .search-input-group { display: flex; width: 100%; }
+        #search-input {
+            flex: 1; border: none; padding: 12px 15px; font-size: 14px;
+            border-radius: var(--radius-sm) 0 0 var(--radius-sm); outline: none;
+            background: transparent;
+        }
+        #search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+        #search-btn {
+            background: var(--primary); color: white; border: none;
+            padding: 0 15px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            cursor: pointer; transition: 0.2s; font-weight: bold;
+        }
+        #search-btn:hover { background: var(--primary-hover); }
+        #search-results {
+            max-height: 250px; overflow-y: auto; background: white; display: none;
+            border-radius: 0 0 var(--radius-sm) var(--radius-sm); border-top: 1px solid #f3f4f6;
+        }
+        .search-item { padding: 10px 15px; font-size: 13px; border-bottom: 1px solid #f9fafb; cursor: pointer; }
+        .search-item:hover { background: #eff6ff; color: var(--primary); }
+
         .auth-badge {
             background: #eff6ff; padding: 10px 14px; border-radius: var(--radius);
             font-size: 13px; color: var(--primary); margin-bottom: 20px;
@@ -64,7 +93,7 @@ const HTML_TEMPLATE = `
         .point-info p { margin: 0; font-size: 12px; color: var(--text-light); }
         .point-actions button {
             background: #f3f4f6; border: none; width: 28px; height: 28px;
-            border-radius: 6px; cursor: pointer; margin-left: 4px; color: var(--text-light);
+            border-radius: 6px; cursor: pointer; margin-left: 4px; color: var(--text-light); font-size:14px;
         }
         
         .leaflet-popup-content-wrapper { border-radius: var(--radius) !important; }
@@ -73,14 +102,13 @@ const HTML_TEMPLATE = `
             border: 1px solid #d1d5db; border-radius: 6px; padding: 8px; font-size: 13px; outline: none;
         }
         
-        /* 模态框通用样式 */
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.4); z-index: 2000; justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.4); z-index: 3000; justify-content: center; align-items: center;
         }
         .modal-card {
             background: white; padding: 30px; border-radius: var(--radius); width: 350px; 
-            max-height: 80vh; display: flex; flex-direction: column; gap: 15px; box-sizing: border-box;
+            max-height: 80dvh; display: flex; flex-direction: column; gap: 15px; box-sizing: border-box;
         }
         .history-item {
             padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; transition: 0.2s;
@@ -92,39 +120,71 @@ const HTML_TEMPLATE = `
         .history-item p { margin: 0; font-size: 11px; color: var(--text-light); }
         .del-btn { background: none; border: none; color: #ef4444; font-size: 12px; cursor: pointer; padding: 8px; border-radius: 4px; }
         .del-btn:hover { background: #fee2e2; }
+
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            #map-container { width: 100%; height: 55dvh; margin: 0; border-radius: 0; order: 1; }
+            #map { border-radius: 0; }
+            #sidebar { width: 100%; height: 45dvh; margin: 0; border-radius: var(--radius) var(--radius) 0 0; order: 2; padding: 15px; box-shadow: 0 -4px 15px rgba(0,0,0,0.1); }
+            #search-box { width: calc(100% - 20px); left: 10px; right: 10px; top: 10px; }
+            .modal-card[style] { width: 90% !important; padding: 20px; }
+            .title-input { font-size: 18px; margin-bottom: 12px; }
+            .auth-badge { margin-bottom: 15px; }
+            .popup-form { width: 100%; min-width: 180px; }
+            .leaflet-popup-content { width: auto !important; max-width: 280px; }
+        }
     </style>
 </head>
 <body>
     <div id="sidebar">
-        <div class="auth-badge" id="user-status">
-            <div class="auth-header">
-                <span id="user-text">游客模式 (不保存)</span>
-                <button class="btn btn-small" onclick="document.getElementById('auth-modal').style.display='flex'">登录/注册</button>
-            </div>
-        </div>
-        
+        <div class="auth-badge" id="user-status"></div>
         <input type="text" id="plan-title" class="title-input" placeholder="输入规划名称..." value="我的旅行规划">
-        
-        <div id="route-list" style="flex: 1; overflow-y: auto; margin-bottom: 20px;">
-            <div style="text-align: center; color: var(--text-light); margin-top: 50px; font-size: 14px;">点击地图添加景点</div>
-        </div>
-
+        <div id="route-list" style="flex: 1; overflow-y: auto; margin-bottom: 20px;"></div>
         <div style="display: flex; gap: 10px;">
             <button class="btn" id="save-btn" style="flex: 2;" onclick="saveToCloud()">云端保存</button>
             <button class="btn btn-outline" style="flex: 1;" onclick="exportMD()">导出MD</button>
         </div>
     </div>
 
-    <div id="map"></div>
+    <div id="map-container">
+        <div id="map"></div>
+        <div id="search-box">
+            <div class="search-input-group">
+                <input type="text" id="search-input" readonly="true" onfocus="this.removeAttribute('readonly');" autocomplete="off" spellcheck="false" placeholder="搜索全球地名..." onkeypress="handleSearchEnter(event)" name="dummy-search-field">
+                <button id="search-btn" onclick="executeSearch()">搜索</button>
+            </div>
+            <div id="search-results"></div>
+        </div>
+    </div>
 
     <div id="auth-modal" class="modal-overlay">
         <div class="modal-card">
             <h3 style="margin:0;">用户登录 / 注册</h3>
-            <input type="text" id="auth-username" placeholder="用户名" style="padding:10px; border:1px solid #ccc; border-radius:6px;">
-            <input type="password" id="auth-password" placeholder="密码" style="padding:10px; border:1px solid #ccc; border-radius:6px;">
+            <p style="margin:0; font-size:12px; color:gray;">用户名最多10字，密码最多20字</p>
+            <input type="text" id="auth-username" placeholder="用户名" maxlength="10" autocomplete="username" style="padding:10px; border:1px solid #ccc; border-radius:6px;">
+            <input type="password" id="auth-password" placeholder="密码" maxlength="20" autocomplete="new-password" style="padding:10px; border:1px solid #ccc; border-radius:6px;">
             <button class="btn" onclick="handleAuth('login')">登录</button>
             <button class="btn btn-outline" onclick="handleAuth('register')">注册</button>
-            <button class="btn btn-outline" style="border:none; color:#9ca3af;" onclick="document.getElementById('auth-modal').style.display='none'">取消</button>
+            <button class="btn btn-outline" style="border:none; color:#9ca3af;" onclick="closeAuthModal()">取消</button>
+        </div>
+    </div>
+
+    <div id="edit-modal" class="modal-overlay">
+        <div class="modal-card">
+            <h3 style="margin:0;">修改景点信息</h3>
+            <input type="hidden" id="edit-idx">
+            <div class="popup-form" style="width: 100%;">
+                <input type="text" id="e-name" placeholder="地点名称">
+                <input type="time" id="e-arrive">
+                <input type="text" id="e-duration" placeholder="游览时长 (选填)">
+                <input type="number" id="e-cost" placeholder="费用 (默认免费)">
+                <select id="e-transport"><option>步行</option><option>公交/地铁</option><option>打车/自驾</option></select>
+                <textarea id="e-details" placeholder="游览细节...(选填)" rows="2"></textarea>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 5px;">
+                <button class="btn" style="flex: 1;" onclick="saveEdit()">保存修改</button>
+                <button class="btn btn-outline" style="flex: 1;" onclick="document.getElementById('edit-modal').style.display='none'">取消</button>
+            </div>
         </div>
     </div>
 
@@ -134,25 +194,105 @@ const HTML_TEMPLATE = `
                 <h3 style="margin:0;">我的云端计划</h3>
                 <button onclick="document.getElementById('history-modal').style.display='none'" style="border:none;background:none;cursor:pointer;font-size:20px;color:#9ca3af;">&times;</button>
             </div>
-            <div id="history-list" style="overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-                </div>
+            <div id="history-list" style="overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 10px;"></div>
         </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // 核心状态
+        // 核心状态与 7 天持久化逻辑
         let currentUser = null; 
         let currentPlanId = null; 
         let waypoints = [];     
         let markers = [];       
+        let searchMarker = null;
+
+        try {
+            const sessionStr = localStorage.getItem('travel_session');
+            if (sessionStr) {
+                const session = JSON.parse(sessionStr);
+                if (session.exp > Date.now()) {
+                    currentUser = session.user;
+                } else {
+                    localStorage.removeItem('travel_session'); 
+                }
+            }
+        } catch(e) {}
         
-        // 初始化地图
+        // 地图初始化
         const map = L.map('map').setView([39.9042, 116.4074], 10);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
         const polyline = L.polyline([], {color: '#3b82f6', weight: 4, opacity: 0.7}).addTo(map);
         let tempMarker = null;
 
+        window.addEventListener('resize', () => {
+            setTimeout(() => { map.invalidateSize(); }, 200);
+        });
+
+        // ==========================================
+        // 搜索逻辑
+        // ==========================================
+        function handleSearchEnter(e) { if (e.key === 'Enter') executeSearch(); }
+
+        async function executeSearch() {
+            const query = document.getElementById('search-input').value.trim();
+            if (!query) return;
+            const resultsDiv = document.getElementById('search-results');
+            const btn = document.getElementById('search-btn');
+            
+            btn.innerText = '...';
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div class="search-item" style="text-align:center;">正在搜索...</div>';
+
+            try {
+                const url = \`https://nominatim.openstreetmap.org/search?format=json&q=\${encodeURIComponent(query)}\`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                resultsDiv.innerHTML = '';
+                if (data.length === 0) {
+                    resultsDiv.innerHTML = '<div class="search-item" style="color:red;text-align:center;">未找到相关地点</div>';
+                    setTimeout(() => resultsDiv.style.display = 'none', 2000);
+                    return;
+                }
+                data.slice(0, 5).forEach(place => {
+                    const item = document.createElement('div');
+                    item.className = 'search-item';
+                    item.innerText = place.display_name;
+                    item.onclick = () => {
+                        const targetLat = parseFloat(place.lat);
+                        const targetLon = parseFloat(place.lon);
+
+                        if (searchMarker) map.removeLayer(searchMarker);
+                        
+                        const redIcon = L.divIcon({
+                            html: '<div style="color:#ef4444; font-size:32px; filter:drop-shadow(0 2px 2px rgba(0,0,0,0.4)); line-height:1;">📍</div>',
+                            className: '', iconSize: [32, 32], iconAnchor: [16, 32] 
+                        });
+                        
+                        searchMarker = L.marker([targetLat, targetLon], {icon: redIcon}).addTo(map)
+                            .bindPopup("<b>搜索结果</b><br><span style='color:gray;font-size:12px;'>在此处点击地图即可开始添加景点</span>").openPopup();
+
+                        document.getElementById('search-input').blur();
+                        map.flyTo([targetLat, targetLon], 14);
+                        resultsDiv.style.display = 'none';
+                        // 还原为只读状态防止重新触发自动填充
+                        document.getElementById('search-input').setAttribute('readonly', 'true');
+                        document.getElementById('search-input').value = '';
+                    };
+                    resultsDiv.appendChild(item);
+                });
+            } catch (err) { resultsDiv.innerHTML = '<div class="search-item" style="color:red;">搜索失败</div>'; } 
+            finally { btn.innerText = '搜索'; }
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#search-box')) document.getElementById('search-results').style.display = 'none';
+        });
+
+        // ==========================================
+        // 点位与连线逻辑
+        // ==========================================
         map.on('click', function(e) {
             if (tempMarker) map.removeLayer(tempMarker);
             const { lat, lng } = e.latlng;
@@ -163,7 +303,7 @@ const HTML_TEMPLATE = `
                     <h4 style="margin:0 0 5px 0;">添加新地点</h4>
                     <input type="text" id="p-name" placeholder="地点名称">
                     <input type="time" id="p-arrive">
-                    <input type="text" id="p-duration" placeholder="游览时长">
+                    <input type="text" id="p-duration" placeholder="游览时长 (选填)">
                     <input type="number" id="p-cost" placeholder="费用 (默认免费)">
                     <select id="p-transport"><option>步行</option><option>公交/地铁</option><option>打车/自驾</option></select>
                     <textarea id="p-details" placeholder="游览细节...(选填)" rows="2"></textarea>
@@ -184,6 +324,7 @@ const HTML_TEMPLATE = `
                 details: document.getElementById('p-details').value
             });
             if (tempMarker) map.removeLayer(tempMarker);
+            if (searchMarker) map.removeLayer(searchMarker); 
             renderRoute();
         };
 
@@ -201,12 +342,14 @@ const HTML_TEMPLATE = `
                 let m = L.marker([p.lat, p.lng], {icon: customIcon}).addTo(map).bindTooltip(p.name);
                 markers.push(m);
 
+                // 添加了 ✎ (编辑) 按钮
                 listDiv.innerHTML += \`
                     <div class="point-item">
                         <div class="point-info"><h4>\${i + 1}. \${p.name}</h4><p>\${p.arriveTime} | \${p.transport}</p></div>
-                        <div class="point-actions">
+                        <div class="point-actions" style="display:flex;">
                             <button onclick="movePoint(\${i}, -1)">↑</button>
                             <button onclick="movePoint(\${i}, 1)">↓</button>
+                            <button onclick="openEdit(\${i})" style="color:var(--primary);">✎</button>
                             <button onclick="removePoint(\${i})" style="color:#ef4444;">×</button>
                         </div>
                     </div>
@@ -214,8 +357,10 @@ const HTML_TEMPLATE = `
             });
             if(waypoints.length === 0) listDiv.innerHTML = '<div style="text-align:center;color:gray;margin-top:50px;">点击地图添加景点</div>';
             polyline.setLatLngs(latlngs);
-            
-            if(latlngs.length > 0) map.fitBounds(L.polyline(latlngs).getBounds(), {padding: [50, 50], maxZoom: 14});
+            if(latlngs.length > 0) {
+                const isMobile = window.innerWidth <= 768;
+                map.fitBounds(L.polyline(latlngs).getBounds(), {padding: isMobile ? [30, 30] : [50, 50], maxZoom: 14});
+            }
         }
 
         window.movePoint = function(idx, dir) {
@@ -226,12 +371,50 @@ const HTML_TEMPLATE = `
         window.removePoint = function(idx) { waypoints.splice(idx, 1); renderRoute(); };
 
         // ==========================================
-        // 账户与 API 交互逻辑
+        // 【新增】编辑景点逻辑
         // ==========================================
+        window.openEdit = function(idx) {
+            const p = waypoints[idx];
+            document.getElementById('edit-idx').value = idx;
+            document.getElementById('e-name').value = p.name;
+            document.getElementById('e-arrive').value = p.arriveTime === '--:--' ? '' : p.arriveTime;
+            document.getElementById('e-duration').value = p.duration === '未定' ? '' : p.duration;
+            document.getElementById('e-cost').value = p.cost;
+            document.getElementById('e-transport').value = p.transport;
+            document.getElementById('e-details').value = p.details || '';
+            document.getElementById('edit-modal').style.display = 'flex';
+        };
+
+        window.saveEdit = function() {
+            const idx = document.getElementById('edit-idx').value;
+            waypoints[idx].name = document.getElementById('e-name').value || '未命名地点';
+            waypoints[idx].arriveTime = document.getElementById('e-arrive').value || '--:--';
+            waypoints[idx].duration = document.getElementById('e-duration').value || '未定';
+            waypoints[idx].cost = document.getElementById('e-cost').value || '0';
+            waypoints[idx].transport = document.getElementById('e-transport').value;
+            waypoints[idx].details = document.getElementById('e-details').value;
+            document.getElementById('edit-modal').style.display = 'none';
+            renderRoute();
+        };
+
+        // ==========================================
+        // 账户与 API 交互逻辑 (防弹窗保存密码处理)
+        // ==========================================
+        window.closeAuthModal = function() {
+            document.getElementById('auth-modal').style.display='none';
+            // 清理密码框，防止 Edge 后续发神经
+            document.getElementById('auth-username').value = '';
+            document.getElementById('auth-password').value = '';
+        };
+
         window.handleAuth = async function(type) {
             const u = document.getElementById('auth-username').value;
             const p = document.getElementById('auth-password').value;
             if(!u || !p) return alert('请输入账号密码');
+            
+            if (u.length > 10) return alert('用户名不能超过10个字符');
+            if (p.length > 20) return alert('密码不能超过20个字符');
+
             try {
                 const res = await fetch('/api/auth/' + type, {
                     method: 'POST',
@@ -241,7 +424,10 @@ const HTML_TEMPLATE = `
                 const data = await res.json();
                 if (data.success) {
                     currentUser = data.user;
-                    document.getElementById('auth-modal').style.display = 'none';
+                    localStorage.setItem('travel_session', JSON.stringify({
+                        user: currentUser, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 
+                    }));
+                    closeAuthModal(); // 关闭并清空密码框
                     updateAuthUI();
                 } else alert('失败: ' + data.error);
             } catch (e) { alert('请求错误'); }
@@ -249,6 +435,7 @@ const HTML_TEMPLATE = `
 
         window.logout = function() {
             currentUser = null; currentPlanId = null; waypoints = [];
+            localStorage.removeItem('travel_session'); 
             document.getElementById('plan-title').value = '我的旅行规划';
             renderRoute(); updateAuthUI();
         };
@@ -263,7 +450,6 @@ const HTML_TEMPLATE = `
         function updateAuthUI() {
             const statusDiv = document.getElementById('user-status');
             if(currentUser) {
-                // 判断是否是管理员
                 const quotaText = currentUser.role === 'admin' ? '无限制' : \`\${currentUser.used_plans || 0}/\${currentUser.max_plans}\`;
                 statusDiv.innerHTML = \`
                     <div class="auth-header">
@@ -311,11 +497,10 @@ const HTML_TEMPLATE = `
                     if (data.action === 'insert') {
                         currentPlanId = data.planId; 
                         currentUser.used_plans = (currentUser.used_plans || 0) + 1;
+                        localStorage.setItem('travel_session', JSON.stringify({ user: currentUser, exp: Date.now() + 7 * 86400 * 1000 }));
                         updateAuthUI();
                         alert('成功创建新规划！');
-                    } else {
-                        alert('当前规划更新成功！');
-                    }
+                    } else alert('当前规划更新成功！');
                 } else alert('保存失败: ' + data.error);
             } catch (err) { alert('网络错误'); } 
             finally { btn.innerText = '云端保存'; }
@@ -380,23 +565,18 @@ const HTML_TEMPLATE = `
                 const data = await res.json();
                 
                 if(data.success) {
-                    // 如果删除的正是当前在编辑的规划，则重置界面
                     if(currentPlanId === id) {
                         currentPlanId = null; waypoints = [];
                         document.getElementById('plan-title').value = '我的旅行规划';
                         renderRoute();
                     }
-                    // 更新额度并刷新列表
                     currentUser.used_plans = Math.max(0, (currentUser.used_plans || 1) - 1);
-                    updateAuthUI();
-                    openHistory();
+                    localStorage.setItem('travel_session', JSON.stringify({ user: currentUser, exp: Date.now() + 7 * 86400 * 1000 }));
+                    updateAuthUI(); openHistory();
                 } else alert('删除失败: ' + data.error);
             } catch(e) { alert('网络错误'); }
         };
 
-        // ==========================================
-        // 纯文本 Markdown 导出 (已移除静态地图功能)
-        // ==========================================
         window.exportMD = function() {
             if (waypoints.length === 0) return alert('请先在地图上添加景点！');
 
@@ -421,6 +601,10 @@ const HTML_TEMPLATE = `
             link.click();
             document.body.removeChild(link);
         };
+
+        // 页面初始化：渲染界面
+        renderRoute();
+        updateAuthUI();
     </script>
 </body>
 </html>
@@ -450,9 +634,12 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       try {
-        // --- 账户路由 ---
         if (request.method === "POST" && url.pathname === "/api/auth/register") {
           const { username, password } = await request.json();
+          
+          if (!username || username.length > 10) return jsonResponse({ error: "用户名不能超过10个字符" }, 400);
+          if (!password || password.length > 20) return jsonResponse({ error: "密码不能超过20个字符" }, 400);
+
           const hashedPassword = await hashPassword(password);
           const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(username).first();
           if (existing) return jsonResponse({ error: "用户名已存在" }, 400);
@@ -472,27 +659,17 @@ export default {
           return jsonResponse({ success: true, user });
         }
 
-        // --- 计划管理路由 ---
-
         if (request.method === "GET" && url.pathname === "/api/plans/list") {
             const userId = url.searchParams.get("userId");
             if (!userId) return jsonResponse({ error: "参数缺失" }, 400);
-            
-            const plans = await env.DB.prepare(
-                "SELECT id, title, created_at FROM plans WHERE user_id = ? ORDER BY created_at DESC"
-            ).bind(userId).all();
-            
+            const plans = await env.DB.prepare("SELECT id, title, created_at FROM plans WHERE user_id = ? ORDER BY created_at DESC").bind(userId).all();
             return jsonResponse({ success: true, plans: plans.results });
         }
 
         if (request.method === "GET" && url.pathname === "/api/plans/get") {
             const planId = url.searchParams.get("planId");
             const userId = url.searchParams.get("userId"); 
-            
-            const plan = await env.DB.prepare(
-                "SELECT id, title, content_json FROM plans WHERE id = ? AND user_id = ?"
-            ).bind(planId, userId).first();
-            
+            const plan = await env.DB.prepare("SELECT id, title, content_json FROM plans WHERE id = ? AND user_id = ?").bind(planId, userId).first();
             if (!plan) return jsonResponse({ error: "计划不存在或无权限访问" }, 404);
             return jsonResponse({ success: true, plan });
         }
@@ -500,10 +677,8 @@ export default {
         if (request.method === "POST" && url.pathname === "/api/plans/delete") {
             const { planId, userId } = await request.json();
             if (!userId) return jsonResponse({ error: "身份验证失败" }, 401);
-
             const result = await env.DB.prepare("DELETE FROM plans WHERE id = ? AND user_id = ?").bind(planId, userId).run();
             if (result.meta.changes === 0) return jsonResponse({ error: "删除失败：文件不存在或无权操作" }, 403);
-            
             return jsonResponse({ success: true });
         }
 
@@ -512,29 +687,19 @@ export default {
           if (!userId) return jsonResponse({ error: "身份验证失败，请重新登录" }, 401);
 
           if (planId) {
-             const result = await env.DB.prepare(
-                "UPDATE plans SET title = ?, content_json = ? WHERE id = ? AND user_id = ?"
-             ).bind(title, JSON.stringify(points), planId, userId).run();
-
+             const result = await env.DB.prepare("UPDATE plans SET title = ?, content_json = ? WHERE id = ? AND user_id = ?").bind(title, JSON.stringify(points), planId, userId).run();
              if (result.meta.changes === 0) return jsonResponse({ error: "更新失败：未找到原始文件或无权修改" }, 403);
              return jsonResponse({ success: true, action: 'update', planId });
-             
           } else {
              const user = await env.DB.prepare("SELECT role, max_plans FROM users WHERE id = ?").bind(userId).first();
-             
-             // 如果角色不是 admin，才执行额度校验
              if (user && user.role !== 'admin') {
                  const count = await env.DB.prepare("SELECT COUNT(*) as c FROM plans WHERE user_id = ?").bind(userId).first();
                  if (count && count.c >= user.max_plans) {
                     return jsonResponse({ error: `已达到存储上限 (${user.max_plans}条)` }, 403);
                  }
              }
-
              const newPlanId = crypto.randomUUID();
-             await env.DB.prepare(
-                "INSERT INTO plans (id, user_id, title, content_json) VALUES (?, ?, ?, ?)"
-             ).bind(newPlanId, userId, title, JSON.stringify(points)).run();
-
+             await env.DB.prepare("INSERT INTO plans (id, user_id, title, content_json) VALUES (?, ?, ?, ?)").bind(newPlanId, userId, title, JSON.stringify(points)).run();
              return jsonResponse({ success: true, action: 'insert', planId: newPlanId });
           }
         }
@@ -543,7 +708,6 @@ export default {
       }
       return jsonResponse({ error: "接口不存在" }, 404);
     }
-
     return new Response('Not Found', { status: 404 });
   }
 };
