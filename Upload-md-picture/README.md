@@ -1,7 +1,4 @@
-这是一份纯粹、详尽的部署指南 `README.md`。你可以直接将其复制并保存到你的项目仓库中。
-
-```markdown
-# Cloudflare R2 + Worker Typora 图床部署指南
+# Cloudflare R2 + Worker —— Typora 图床部署指南
 
 本指南将引导你完成基于 Cloudflare R2 对象存储和 Cloudflare Worker 的 Typora 图床及可视化管理面板的完整部署。
 
