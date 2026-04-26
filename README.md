@@ -20,4 +20,6 @@
 
 7. IP-FILTER——用于实时从全球 Cloudflare 优选节点池中提取、筛选指定国家/地区的 IP，并生成适用于代理订阅平台的 CFnew 或 edgetunnel 的API订阅链接
    
-8. 。。。
+8. Upload-md-picture——自动上传markdown中引用图片到R2存储桶的方案，实现方便的markdown图片管理。
+
+9. 。。。
