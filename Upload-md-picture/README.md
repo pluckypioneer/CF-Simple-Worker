@@ -84,7 +84,7 @@
 2. 在“插入图片时...”选项中，推荐勾选 **上传图片**。
 3. 上传服务设定选择 **自定义命令 (Custom Command)**。
 4. 在命令输入框中填入执行 Python 脚本的命令。注意路径必须是绝对路径：
-   - **Windows 示例**: `python "D:\scripts\upload.py"`
+   - **Windows 示例**: `python "D:\scripts\upload.py"`或`py "D:\scripts\upload.py"`
    - **Mac/Linux 示例**: `python3 "/Users/username/scripts/upload.py"`
 5. 点击 **验证图片上传选项 (Test Uploader)**，如果提示成功并返回了正确的 URL，则配置完成。
 
@@ -96,3 +96,6 @@
    - **密码**: 填写你在环境变量中设置的 `WEB_PASSWORD`。
 3. 验证通过后，即可进入可视化图床管理面板，进行图片的查看、复制直链和删除操作。
 ```
+## 注意
+
+如果你身在中国大陆，默认的cloudflare的`*.worker.dev`域名是无法访问的，也就意味着无法使用该域名上传，此情况需要你自己绑定没有被墙的域名，不仅仅是worker，而且R2的自带公开访问域名有速率限制，因此也推荐绑定自己的域名链接，以实现更好的效果。
