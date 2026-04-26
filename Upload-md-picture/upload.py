@@ -3,7 +3,7 @@ import os
 import requests
 import time
 
-# 你的 Worker 地址和刚才设置的密码
+# 换成你自己的 Worker URL地址和AUTH_TOKEN访问密钥
 WORKER_URL = "https://r2-image-upload.yourname.workers.dev" 
 TOKEN = "MySuperSecretToken123"
 
