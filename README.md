@@ -12,7 +12,7 @@
 
 3. HoneyPot——蜜罐系统，用于🎣
 
-4. Telegram-Personal-AI-Assistant——在telegram上搭建ai助手
+4. **Telegram-Personal-AI-Assistant**——在telegram上搭建ai助手，强烈推荐部署一个玩一玩试一试
 
 5. Telegram-Timer——在telegram上搭建定时器bot，配合设置telegram内置代理实现及时接收定时提示
 
