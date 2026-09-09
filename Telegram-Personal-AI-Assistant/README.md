@@ -110,6 +110,8 @@ npx wrangler ai models
 
 或者随时查阅官方文档：[Cloudflare Workers AI Models 官方目录](https://developers.cloudflare.com/workers-ai/models/)。
 
+注意有部分模型只支持paid plan，需自行查看查找。
+
 ### 2. 在代码中修改模型映射
 
 打开代码中的 `MODELS` 常量对象，根据你的需求调整模型 ID。例如：
