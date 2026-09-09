@@ -22,4 +22,6 @@
    
 8. Upload-md-picture——自动上传markdown中引用图片到R2存储桶的方案，实现方便的markdown图片管理。
 
-9. 。。。
+9. CLoudflare Open ai form api proxy
+
+10. 
