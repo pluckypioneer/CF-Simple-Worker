@@ -164,7 +164,7 @@ async function handleMessage(id, text, env) {
 async function handleMoodCheck(id, env) {
   if (!env.AI) return sendMsg(id, "尚未绑定 Cloudflare AI 实例，无法分析心情。", env);
 
-  const sent = await sendMsg(id, "<i>主人，你猜猜我现在是什么心情啊...</i>", env);
+  const sent = await sendMsg(id, "<i>让我想想现在是什么心情...</i>", env);
   const mid = sent?.result?.message_id;
 
   const sendFallback = async (text) => {
@@ -234,10 +234,10 @@ async function moodScore(env, content) {
   return score;
 }
 
-// 用默认基模生成心情话语并编辑上屏（非流式，稳定可靠）
+// 用非推理模型生成心情话语并编辑上屏（非流式，稳定可靠、不会吐出思考）
 async function streamMoodReply(id, mid, msgs, env) {
   try {
-    const res = await env.AI.run(DEFAULT_MODEL, { messages: msgs });
+    const res = await env.AI.run(CAPTION_MODEL, { messages: msgs });
     const { answer } = splitThink(res.response || "");
     if (answer) await editMsgSimple(id, mid, esc(answer), env).catch(() => {});
     return answer;
