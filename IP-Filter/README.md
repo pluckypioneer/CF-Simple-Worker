@@ -9,6 +9,9 @@
 
 数据源来自 `https://zip.cm.edu.kg/all.json`，Worker 部署后即可使用。
 
+<img width="1233" height="679" alt="image" src="https://github.com/user-attachments/assets/9715ab49-b762-443f-91ba-8f8968fdfcf5" />
+
+
 ## 功能
 
 - **多地区筛选** — 可视化选择多个国家/地区，支持全选、随机抽选
