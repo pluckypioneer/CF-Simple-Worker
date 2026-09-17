@@ -5,60 +5,78 @@
 💡 **特别声明与致谢：**
 本项目是从 [alienwaregf/Cloudflare-Country-Specific-IP-Filter](https://github.com/alienwaregf/Cloudflare-Country-Specific-IP-Filter) 的开源代码改进而来。在此对原作者的优秀框架，以及数据源提供者（CM 大佬、Joey 大佬）表示最诚挚的感谢！
 
----
+基于 Cloudflare Worker 的全球 IP 节点筛选工具，支持按国家/地区和 ASN 过滤，提供 CFnew / Edgetunnel 订阅格式输出。
 
-## ✨ 新增与改进特性
+数据源来自 `https://zip.cm.edu.kg/all.json`，Worker 部署后即可使用。
 
-相比于原版，此增强版进行了以下核心升级：
+## 功能
 
-* 🔒 **后台密码保护：** 网页访问入口移至 `/admin` 并加入了 HTTP Basic 认证，防止你的 Worker 被他人滥用刷量。
-* 🇨🇳 **解除地区限制：** 移除了对 `CN`（中国大陆）节点的强制屏蔽，现在可以自由获取所有存活地区的 IP。
-* 🧹 **精准脏数据清洗：** 优化了正则表达式与匹配逻辑，严格校验 2 位字母的国家代码，彻底消灭了原版中“出现 `U` 卡片却无法获取 IP”的脏数据 Bug。
-* 🔀 **动态随机打乱：** 每次通过 API 拉取节点时，程序会自动对该地区的 IP 池进行洗牌，确保每次获取的节点都不同，自动淘汰失效节点。
+- **多地区筛选** — 可视化选择多个国家/地区，支持全选、随机抽选
+- **ASN 搜索** — 右上角搜索框输入 ASN 编号，快速定位该网络下的所有节点
+- **两种输出格式** — CFnew (`ip:port#序号 国旗 名称`) 和 Edgetunnel (`ip:port#国旗 名称`)
+- **订阅链接生成** — 一键复制 `/CFnew/US-JP` 或 `/edgetunnel/US,JP` 格式的订阅地址
+- **暗色模式** — 支持浅色/深色/跟随系统
+- **CORS 全开** — 所有接口均可跨域调用
 
----
+## API
+
+| 路径 / 参数 | 说明 |
+|---|---|
+| `GET /` | Web UI 主页 |
+| `GET ?get_regions=1` | 返回所有地区统计 (JSON) |
+| `GET ?api=1&region=US,JP&format=cf_line_short&limit=10` | 按地区提取节点 |
+| `GET ?asn=13335` | 按 ASN 搜索节点 (JSON) |
+| `GET /CFnew/US-JP?limit=10` | CFnew 格式订阅 (路径模式) |
+| `GET /edgetunnel/US,JP?limit=10` | Edgetunnel 格式订阅 (路径模式) |
+| `GET /CFnew/US-JP?base64=1` | Base64 编码输出 |
+
+### ASN 搜索返回格式
+
+```json
+{
+  "asn": 13335,
+  "total": 3,
+  "items": [
+    {
+      "ipPort": "1.1.1.1:443",
+      "hostname": "one.one.one.one",
+      "country": "US",
+      "countryCn": "美国",
+      "countryEmoji": "🇺🇸",
+      "city": "Los Angeles",
+      "colo": "LAX",
+      "asn": 13335,
+      "asnOrg": "Cloudflare, Inc."
+    }
+  ]
+}
+```
+## 参数说明
+
+| 参数 | 说明 | 默认值 |
+|---|---|---|
+| `region` | 国家代码，逗号或短横线分隔 | 无 (必填) |
+| `format` | 输出格式 | `line` |
+| `limit` | 单地区最大提取数量 (0=不限) | `0` |
+| `base64` | 设为 `1` 启用 Base64 编码 | 关闭 |
+
+### format 可选值
+
+| 值 | 格式示例 |
+|---|---|
+| `line` | `ip:port#🇺🇸 美国` |
+| `cf_line_short` | `ip:port#🇺🇸 美国¹` |
+| `cf_comma_short` | 同上，逗号分隔 |
+| `comma` | 同 line，逗号分隔 |
+
 
 ## 🚀 部署指南
 
 本项目完全依赖 Cloudflare Workers 运行，零成本、免服务器。
 
-### 1. 部署代码
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
 2. 在左侧菜单找到 **Workers & Pages** -> 点击 **Create application** -> **Create Worker**。
 3. 为你的 Worker 起个名字，点击 **Deploy**。
 4. 进入刚刚创建的 Worker，点击右上角的 **Edit code**。
-5. 清空左侧编辑器里的默认代码，将本项目修改后的完整代码粘贴进去，点击右上角的 **Deploy** 保存。
+5. 清空左侧编辑器里的默认代码，将本项目修改后的完整代码粘贴进去，点击右上角的 **Deploy** 保存即可部署。
 
-### 2. 设置访问密码 (重要)
-为了让密码验证生效并修改默认密码：
-1. 返回 Worker 的详情页，点击 **Settings (设置)** 选项卡。
-2. 在左侧菜单选择 **Variables and Secrets (变量和机密)**。
-3. 点击 **Add variable (添加变量)**：
-   * **Variable name (变量名称):** 输入 `PASSWORD`
-   * **Value (值):** 输入你想要的密码（例如 `mysecret123`）
-4. 点击 **Deploy** 保存。
-
-*(注：如果不设置此环境变量，默认访问密码为 `666666`)*
-
----
-
-## 📖 使用说明
-
-### 1. 访问可视化后台
-* 访问路径：`https://你的worker域名.workers.dev/admin` (访问根目录 `/` 会自动跳转)。
-* **登录凭证：** 弹出的登录框中，用户名可**随意填写**（例如填 `admin`），密码填写你在上一步设置的 `PASSWORD`。
-* 登录后，你可以通过点击国家卡片，可视化地生成 IP 列表，或一键复制 API 订阅地址。
-
-### 2. API 订阅拉取 (客户端使用)
-生成的 API 链接可以直接填入代理客户端的“订阅/Servers”设置中。**API 路径无需密码即可访问**，方便客户端自动更新。
-
-**支持的格式：**
-* **CFnew 格式:** `https://你的worker域名.workers.dev/CFnew/HK-SG-JP?limit=10`
-* **edgetunnel 格式:** `https://你的worker域名.workers.dev/edgetunnel/US-GB?limit=5`
-
-**URL 参数说明：**
-* 路径中的 `HK-SG-JP` 为你需要提取的国家代码组合，使用 `-` 隔开。
-* `?limit=10` 为**单地区**获取上限限制。如果不加该参数或设置为 `0`，则返回该地区所有存活 IP。
-
-### 3. 建议的最佳实践
-强烈建议在你的客户端（Clash / v2rayN 等）中，将该订阅链接的**自动更新频率设置为“每日更新”**。因为本程序具备随机洗牌机制，每日更新可以确保你淘汰死节点，永远获取最新鲜的优选 IP。
