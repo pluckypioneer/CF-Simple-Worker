@@ -123,6 +123,7 @@ export default {
 
         if (url.searchParams.has('api')) return handleApiRequest(url);
         if (url.searchParams.has('get_regions')) return handleGetRegions();
+        if (url.searchParams.has('asn')) return handleAsnSearch(url);
         
         if (url.pathname === '/' || url.pathname === '/index') {
             return new Response(getHtml(), { headers: { 'content-type': 'text/html; charset=UTF-8' } });
@@ -183,6 +184,73 @@ async function handleGetRegions() {
         });
     } catch (e) {
         return new Response(JSON.stringify({ regions: [], error: e.message }), { 
+            headers: { 'content-type': 'application/json; charset=UTF-8', 'Access-Control-Allow-Origin': '*' },
+            status: 500
+        });
+    }
+}
+
+async function handleAsnSearch(url) {
+    const asnParam = url.searchParams.get('asn');
+    if (!asnParam) {
+        return new Response(JSON.stringify({ error: 'Missing asn parameter' }), {
+            headers: { 'content-type': 'application/json; charset=UTF-8', 'Access-Control-Allow-Origin': '*' },
+            status: 400
+        });
+    }
+    const targetAsn = parseInt(asnParam.replace(/^AS/i, ''), 10);
+    if (isNaN(targetAsn)) {
+        return new Response(JSON.stringify({ error: 'Invalid ASN number' }), {
+            headers: { 'content-type': 'application/json; charset=UTF-8', 'Access-Control-Allow-Origin': '*' },
+            status: 400
+        });
+    }
+    try {
+        const jsonData = await fetchSourceJson();
+        if (!jsonData || !Array.isArray(jsonData.data)) {
+            return new Response(JSON.stringify({ items: [], total: 0 }), {
+                headers: { 'content-type': 'application/json; charset=UTF-8', 'Access-Control-Allow-Origin': '*' }
+            });
+        }
+        const matched = [];
+        const seenIpPorts = new Set();
+        for (const item of jsonData.data) {
+            if (!item) continue;
+            const meta = item.meta || {};
+            if (meta.asn !== targetAsn) continue;
+            const ip = item.ip;
+            const ports = Array.isArray(item.port) && item.port.length > 0 ? item.port : [443];
+            for (const port of ports) {
+                const ipPort = `${ip}:${port}`;
+                if (!seenIpPorts.has(ipPort)) {
+                    seenIpPorts.add(ipPort);
+                    matched.push({
+                        ipPort,
+                        hostname: meta.hostname || '',
+                        country: meta.country || '',
+                        countryCn: meta.country_cn || REGION_MAP[meta.country] || meta.country || '',
+                        countryEmoji: getFlagEmoji(meta.country),
+                        city: meta.city || '',
+                        region: meta.region || '',
+                        asn: meta.asn || 0,
+                        asnOrg: meta.asOrganization || '',
+                        colo: meta.colo ? meta.colo.iata : ''
+                    });
+                }
+            }
+        }
+        return new Response(JSON.stringify({
+            asn: targetAsn,
+            items: matched,
+            total: matched.length
+        }), {
+            headers: {
+                'content-type': 'application/json; charset=UTF-8',
+                'Access-Control-Allow-Origin': '*'
+            }
+        });
+    } catch (e) {
+        return new Response(JSON.stringify({ error: e.message, items: [], total: 0 }), {
             headers: { 'content-type': 'application/json; charset=UTF-8', 'Access-Control-Allow-Origin': '*' },
             status: 500
         });
@@ -375,6 +443,54 @@ function getHtml() {
             gap: 12px;
             pointer-events: none;
         }
+        .asn-search-wrap { position: relative; }
+        .asn-results {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: calc(100% + 8px);
+            width: 340px;
+            max-height: 420px;
+            overflow-y: auto;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+            z-index: 100;
+            padding: 6px;
+        }
+        .dark .asn-results { background: #1e293b; border-color: #334155; }
+        .asn-results.show { display: block; }
+        .asn-result-item {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .asn-result-item:hover { background: #f1f5f9; }
+        .dark .asn-result-item:hover { background: #334155; }
+        .asn-result-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .asn-result-ip { font-family: 'Fira Code', monospace; font-weight: 700; font-size: 13px; color: #0f172a; }
+        .dark .asn-result-ip { color: #e2e8f0; }
+        .asn-result-meta { font-size: 11px; color: #94a3b8; display: flex; gap: 6px; flex-wrap: wrap; }
+        .asn-result-meta span { display: flex; align-items: center; gap: 2px; }
+        .asn-empty { text-align: center; padding: 24px 12px; color: #94a3b8; font-size: 13px; }
+        .asn-count-badge {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: #dbeafe;
+            color: #2563eb;
+        }
+        .dark .asn-count-badge { background: #1e3a5f; color: #60a5fa; }
         .toast {
             pointer-events: auto;
             display: flex;
@@ -415,6 +531,14 @@ function getHtml() {
         </div>
 
         <div class="flex items-center gap-3">
+            <div class="asn-search-wrap">
+                <div class="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 shadow-sm">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400 mr-2 flex-shrink-0"></i>
+                    <input id="asnInput" type="text" placeholder="搜索 ASN" class="w-24 sm:w-28 bg-transparent text-sm outline-none text-slate-700 dark:text-slate-200 font-mono focus:w-32 sm:focus:w-36 transition-all" onkeydown="if(event.key==='Enter')searchAsn()">
+                    <button onclick="searchAsn()" class="ml-1 text-slate-400 hover:text-blue-500 transition"><i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+                </div>
+                <div id="asnResults" class="asn-results custom-scrollbar"></div>
+            </div>
             <div class="relative">
                 <button onclick="toggleDropdown(event)" class="w-10 h-10 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition shadow-sm">
                     <i data-lucide="sun" class="w-5 h-5" id="themeIcon"></i>
@@ -664,6 +788,58 @@ function getHtml() {
         function closeAllDropdowns(e) { 
             document.getElementById('themeDropdown').classList.remove('open');
             document.getElementById('linkMenu').classList.remove('open');
+            const ar = document.getElementById('asnResults');
+            const sw = document.querySelector('.asn-search-wrap');
+            if (ar && sw && !sw.contains(e.target)) ar.classList.remove('show');
+        }
+
+        async function searchAsn() {
+            const input = document.getElementById('asnInput');
+            const val = input.value.trim();
+            const panel = document.getElementById('asnResults');
+            if (!val) { panel.classList.remove('show'); return; }
+            const num = parseInt(val.replace(/^AS/i, ''), 10);
+            if (isNaN(num)) { panel.innerHTML = '<div class="asn-empty">请输入有效的 ASN 编号</div>'; panel.classList.add('show'); return; }
+            panel.innerHTML = '<div class="asn-empty"><i data-lucide="loader-2" class="w-5 h-5 animate-spin inline-block mr-1"></i>搜索中...</div>';
+            panel.classList.add('show');
+            lucide.createIcons();
+            try {
+                const res = await fetch('?asn=' + num);
+                const data = await res.json();
+                if (data.error) {
+                    panel.innerHTML = '<div class="asn-empty">' + data.error + '</div>';
+                    return;
+                }
+                if (!data.items || data.items.length === 0) {
+                    panel.innerHTML = '<div class="asn-empty">未找到 ASN ' + num + ' 的节点</div>';
+                    return;
+                }
+                let html = '<div style="padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #f1f5f9;margin-bottom:4px"><span style="font-size:11px;font-weight:700;color:#64748b">AS' + num + '  (' + data.total + ' 个节点)</span><button onclick="copyAllAsnIps()" style="font-size:11px;font-weight:600;color:#2563eb;cursor:pointer;background:none;border:none">全部复制</button></div>';
+                for (const item of data.items) {
+                    html += '<div class="asn-result-item" onclick="copyAsnIp(\\'' + item.ipPort + '\\')">';
+                    html += '<div class="asn-result-top"><span class="asn-result-ip">' + item.countryEmoji + ' ' + item.ipPort + '</span><span class="asn-count-badge">' + (item.colo || '') + '</span></div>';
+                    html += '<div class="asn-result-meta"><span>' + item.countryCn + '</span>';
+                    if (item.city) html += '<span>' + item.city + '</span>';
+                    if (item.hostname) html += '<span>' + item.hostname + '</span>';
+                    html += '</div></div>';
+                }
+                panel.innerHTML = html;
+                lucide.createIcons();
+                window._asnIps = data.items.map(i => i.ipPort);
+            } catch(e) {
+                panel.innerHTML = '<div class="asn-empty">搜索出错，请重试</div>';
+            }
+        }
+        function copyAsnIp(ipPort) {
+            navigator.clipboard.writeText(ipPort);
+            showToast('已复制: ' + ipPort, 'success');
+        }
+        
+        function copyAllAsnIps() {
+            if (window._asnIps && window._asnIps.length > 0) {
+                navigator.clipboard.writeText(window._asnIps.join('\\n'));
+                showToast('已复制全部 ' + window._asnIps.length + ' 个节点', 'success');
+            }
         }
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => { if(currentThemeMode === 'system') applyTheme(); });
         applyTheme(); init(); lucide.createIcons();
