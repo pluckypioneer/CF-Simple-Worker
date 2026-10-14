@@ -25,11 +25,11 @@ const MODELS = {
 
 const DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 const VISION_MODEL = "@cf/llava-hf/llava-1.5-7b-hf";
-const MAX_OUTPUT_TOKENS = 2048;
+const MAX_OUTPUT_TOKENS = 4096;
 const MAX_HISTORY_PAIRS = 8;
-const MAX_INPUT_LENGTH = 1000;
+const MAX_INPUT_LENGTH = 12000;
 const HISTORY_TTL = 7 * 24 * 60 * 60;
-const STREAM_TIMEOUT = 25000;
+const STREAM_TIMEOUT = 22000;
 const EDIT_THROTTLE_MS = 1500;
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
@@ -38,6 +38,9 @@ const TG_API = "https://api.telegram.org/bot";
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("Hermione is running.", { status: 200 });
+    if (env.WEBHOOK_SECRET && request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
+      return new Response("Forbidden", { status: 403 });
+    }
 
     let payload;
     try { payload = await request.json(); } catch { return new Response("OK", { status: 200 }); }
@@ -62,6 +65,12 @@ export default {
     // 绑定单一用户 ID 严格拦截
     if (!env.ALLOWED_ID || chatId !== String(env.ALLOWED_ID)) return new Response("OK", { status: 200 });
 
+    // 可选 Queues 绑定：耗时图片/语音任务不受 waitUntil 的 30 秒窗口限制。
+    if (env.TASK_QUEUE) {
+      await env.TASK_QUEUE.send({ message: msg });
+      return new Response("OK", { status: 200 });
+    }
+
     // 输入分类：图片走识图链路，纯文本走对话链路
     if (hasPhoto) {
       ctx.waitUntil(handlePhoto(chatId, msg, env));
@@ -69,6 +78,23 @@ export default {
       ctx.waitUntil(handleMessage(chatId, msg.text.trim(), env));
     }
     return new Response("OK", { status: 200 });
+  },
+  async queue(batch, env) {
+    // 消费者配置 max_concurrency=1，串行写入聊天历史。
+    for (const task of batch.messages) {
+      const msg = task.body?.message;
+      const id = String(msg?.chat?.id);
+      if (id !== String(env.ALLOWED_ID)) { task.ack(); continue; }
+      try {
+        if (msg.photo?.length) await handlePhoto(id, msg, env);
+        else if (msg.text) await handleMessage(id, msg.text.trim(), env);
+        task.ack();
+      } catch (e) {
+        console.error("Queue task failed", { message: e.message });
+        // 不自动重发已发送的消息，避免重复回复。
+        task.ack();
+      }
+    }
   }
 };
 
@@ -143,7 +169,8 @@ async function handleMessage(id, text, env) {
     const history = rawH ? JSON.parse(rawH) : [];
     const lang = rawL || "auto";
     const sysPrompt = buildPrompt(lang);
-    const safeInput = text.slice(0, MAX_INPUT_LENGTH);
+    if (text.length > MAX_INPUT_LENGTH) return sendMsg(id, "这条消息太长了，请分成几条发送，我不想漏掉你说的话。", env);
+    const safeInput = text;
     const msgs = [{ role: "system", content: sysPrompt }, ...history, { role: "user", content: safeInput }];
 
     // ===== Cloudflare 托管模型统一处理 =====
@@ -209,7 +236,7 @@ async function handlePhoto(id, msg, env) {
     const msgs = [{ role: "system", content: sysPrompt }, ...history, { role: "user", content: userContent }];
 
     const res = await env.AI.run(DEFAULT_MODEL, { messages: msgs, max_tokens: MAX_OUTPUT_TOKENS });
-    const { think, answer } = splitThink(res.response || "");
+    const { think, answer } = splitThink(modelText(res));
     const reply = answer || desc;
     const head = think ? `<blockquote expandable>💭 <b>思考</b>\n${esc(think)}</blockquote>\n\n` : "";
     await sendLongText(id, mid, reply, env, head);
@@ -302,8 +329,8 @@ async function moodScore(env, content) {
 async function streamMoodReply(id, mid, msgs, env) {
   try {
     const res = await env.AI.run(CAPTION_MODEL, { messages: msgs, max_tokens: 512 });
-    const { answer } = splitThink(res.response || "");
-    if (answer) await editMsgSimple(id, mid, esc(answer), env).catch(() => {});
+    const { answer } = splitThink(modelText(res));
+    if (answer) await sendLongText(id, mid, answer, env);
     return answer;
   } catch (e) {
     console.error("Mood Base Error:", e);
@@ -321,7 +348,7 @@ async function handleCFModel(id, text, modelKey, type, msgs, history, safeInput,
   try {
     if (type === "llm_cf") {
       const res = await env.AI.run(modelKey, { messages: msgs, max_tokens: MAX_OUTPUT_TOKENS });
-      const { think, answer } = splitThink(res.response || "");
+      const { think, answer } = splitThink(modelText(res));
       if (!answer) {
         await editMsgSimple(id, sentMid, "⚠️ 模型没有返回任何内容，请换一个模型再试。", env);
         return;
@@ -360,41 +387,31 @@ async function handleCFModel(id, text, modelKey, type, msgs, history, safeInput,
       const say = (spoken || text).slice(0, 200);
       const ttsLang = /[\u4e00-\u9fa5]/.test(say) ? "zh" : "en";
 
-      // 两种调用方式都试，取第一个有效音频
-      let arrayBuffer = null;
-      const attempts = [
-        () => env.AI.run(modelKey, { prompt: say, lang: ttsLang }, { returnRawResponse: true }),
-        () => env.AI.run(modelKey, { prompt: say, lang: ttsLang })
-      ];
-      for (const run of attempts) {
-        try {
-          const buf = await audioToArrayBuffer(await run());
-          if (isValidAudio(buf)) { arrayBuffer = buf; break; }
-        } catch (e) {
-          console.error("TTS attempt failed:", e);
-        }
+      let arrayBuffer, info;
+      // 静音或损坏时重试一次，不把无声文件交给 Telegram。
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const audio = await env.AI.run(modelKey, { prompt: say, lang: ttsLang });
+        arrayBuffer = await audioToArrayBuffer(audio);
+        info = inspectAudio(arrayBuffer);
+        console.log("TTS output", { attempt: attempt + 1, bytes: arrayBuffer.byteLength, ...info });
+        if (info.valid) break;
       }
-      if (!arrayBuffer) {
-        await editMsgSimple(id, sentMid, "🔇 抱歉，语音没生成好，重新试试看？", env);
+      if (!info.valid) {
+        await sendLongText(id, sentMid, `语音暂时生成失败，我先把想说的话发给你：\n${say}`, env);
         return;
       }
-      // 先按音频发送；若 Telegram 不接受该格式，退回文件发送
-      let sentOk = false;
-      try {
-        const voiceRes = await sendAudio(id, arrayBuffer, env);
-        const voiceData = await voiceRes.json();
-        sentOk = !!voiceData.ok;
-        if (!sentOk) console.error("sendAudio failed:", voiceData.description);
-      } catch (e) {
-        console.error("sendAudio error:", e);
-      }
-      if (!sentOk) {
-        const docRes = await sendDocument(id, arrayBuffer, env);
-        const docData = await docRes.json();
-        sentOk = !!docData.ok;
-        if (!sentOk) throw new Error(docData.description || "不好意思宝宝，语音发送失败");
-      }
-      if (sentOk && sentMid) await deleteMsg(id, sentMid, env);
+      const fmt = detectAudioFormat(arrayBuffer);
+      // Telegram 的 WAV 使用文件发送；MP3 / OGG 使用可播放的语音消息。
+      const method = ["mp3", "ogg"].includes(fmt.ext) ? "sendVoice" : "sendDocument";
+      const field = method === "sendVoice" ? "voice" : "document";
+      const form = new FormData();
+      form.append("chat_id", id);
+      form.append(field, new File([arrayBuffer], `hermione.${fmt.ext}`, { type: fmt.mime }));
+      form.append("caption", say.slice(0, 900));
+      const response = await fetch(`${TG_API}${env.TELEGRAM_TOKEN}/${method}`, { method: "POST", body: form });
+      const result = await response.json();
+      if (!result.ok) throw new Error(`Telegram audio: ${result.description || response.status}`);
+      if (sentMid) await deleteMsg(id, sentMid, env);
     } 
     else if (type === "translation") {
       const target_lang = /[\u4e00-\u9fa5]/.test(text) ? "en" : "zh";
@@ -409,8 +426,8 @@ async function handleCFModel(id, text, modelKey, type, msgs, history, safeInput,
 // ===== API 辅助函数 =====
 async function streamDeepSeek(id, mid, msgs, env, modelId, thinking) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), STREAM_TIMEOUT);
-  const payload = { model: modelId || "deepseek-v4-flash", messages: msgs, stream: true };
+  const timer = setTimeout(() => ctrl.abort(), env.TASK_QUEUE ? 120000 : STREAM_TIMEOUT);
+  const payload = { model: modelId || "deepseek-v4-flash", messages: msgs, stream: true, max_tokens: MAX_OUTPUT_TOKENS };
   if (thinking) payload.thinking = { type: "enabled" };
   try {
     const res = await fetch(DEEPSEEK_URL, {
@@ -429,25 +446,38 @@ async function streamDeepSeek(id, mid, msgs, env, modelId, thinking) {
 
 // 逐行读取 SSE，并把每条 data 的 JSON 传给 onData（兼容 CF 原生与 OpenAI 两种格式）
 async function forEachSseData(res, onData) {
+  if (!res.body) throw new Error("Empty stream");
   const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  let buf = "";
-  while (true) {
-    let chunk;
-    try {
-      const wait = sleep(8000).then(() => "__IDLE__");
-      chunk = await Promise.race([reader.read(), wait]);
-    } catch { break; }
-    if (chunk === "__IDLE__" || chunk.done) break;
-    buf += dec.decode(chunk.value, { stream: true });
-    const lines = buf.split("\n"); buf = lines.pop();
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      try { onData(JSON.parse(payload)); } catch {}
+  const decoder = new TextDecoder();
+  let buffer = "", completed = false;
+  const process = async frame => {
+    const data = frame.split("\n").filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trimStart()).join("\n");
+    if (!data) return;
+    if (data.trim() === "[DONE]") { completed = true; return; }
+    const parsed = JSON.parse(data);
+    if (parsed.error) throw new Error("Model stream returned an error");
+    await onData(parsed);
+  };
+  try {
+    while (!completed) {
+      const {done, value} = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, {stream: true});
+      let match;
+      while (!completed && (match = /\r?\n\r?\n/.exec(buffer))) {
+        const frame = buffer.slice(0, match.index).replace(/\r\n/g, "\n");
+        buffer = buffer.slice(match.index + match[0].length);
+        await process(frame);
+      }
+      if (done) {
+        if (!completed && buffer.trim()) await process(buffer.replace(/\r\n/g, "\n"));
+        break;
+      }
     }
+    if (!completed) throw new Error("Stream ended without completion marker");
+  } finally {
+    try { await reader.cancel(); } catch {}
+    reader.releaseLock();
   }
 }
 
@@ -461,41 +491,51 @@ function sseDelta(d) {
 }
 
 async function readStream(id, mid, res, env, opts = {}) {
-  const { showThink = true } = opts;
-  let think = "", answer = "", lastEdit = Date.now();
-  await forEachSseData(res, (d) => {
-    const piece = sseDelta(d);
-    if (showThink && piece.reasoning) think += piece.reasoning;
-    if (piece.content) answer += piece.content;
-    if (Date.now() - lastEdit > EDIT_THROTTLE_MS) {
-      lastEdit = Date.now();
-      if (showThink) editMsg(id, mid, think, answer, env);
-      else if (answer) editMsgSimple(id, mid, esc(answer), env);
-    }
-  });
-  if (showThink) await editMsg(id, mid, think, answer, env);
-  else if (answer) await editMsgSimple(id, mid, esc(answer), env);
+  let answer = "", finishReason = null, interrupted = null;
+  try {
+    await forEachSseData(res, d => {
+      const piece = sseDelta(d);
+      if (piece.content) answer += piece.content;
+      const reason = d?.choices?.[0]?.finish_reason;
+      if (reason) finishReason = reason;
+    });
+  } catch (e) { interrupted = e; }
+  // 最终统一分条发送，避免并发编辑覆盖和 HTML 截断。
+  if (answer) await sendLongText(id, mid, splitThink(answer).answer, env);
+  if (interrupted || finishReason === "length") {
+    await sendMsg(id, interrupted
+      ? "⚠️ 回复连接中断，上面是已收到的部分内容，请让我继续。"
+      : "⚠️ 回复达到了生成长度上限，请让我继续。", env);
+    console.warn("Incomplete AI response", { finishReason, interrupted: !!interrupted, length: answer.length });
+  }
+  if (!answer) throw interrupted || new Error("Model returned no answer");
   return answer;
 }
 
 async function editMsg(id, mid, think, answer, env) {
-  try {
-    let text = "";
-    if (think) text += `<blockquote expandable>💭 <b>思考</b>\n${esc(think)}</blockquote>\n\n`;
-    text += answer ? esc(answer) : think ? "<i>对方思考如何回复你中...</i>" : "<i>思考中...</i>";
-    if (text.length > 4000) text = text.slice(0, 4000) + "...";
-    await fetch(`${TG_API}${env.TELEGRAM_TOKEN}/editMessageText`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: id, message_id: mid, text, parse_mode: "HTML" })
-    });
-  } catch {}
+  return sendLongText(id, mid, answer || "思考中...", env);
 }
 
+async function telegram(method, payload, env) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(`${TG_API}${env.TELEGRAM_TOKEN}/${method}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (result.ok) return result;
+    if (method === "editMessageText" && result.description?.includes("message is not modified")) return result;
+    const delay = result.parameters?.retry_after;
+    if (result.error_code === 429 && attempt < 2 && delay <= 3) {
+      await new Promise(resolve => setTimeout(resolve, delay * 1000));
+      continue;
+    }
+    throw new Error(`Telegram ${method}: ${result.description || response.status}`);
+  }
+}
 async function editMsgSimple(id, mid, text, env) {
-  return fetch(`${TG_API}${env.TELEGRAM_TOKEN}/editMessageText`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: id, message_id: mid, text, parse_mode: "HTML" })
-  });
+  if (!mid) return sendMsg(id, text, env);
+  return telegram("editMessageText", { chat_id: id, message_id: mid, text, parse_mode: "HTML" }, env);
 }
 
 async function deleteMsg(id, mid, env) {
@@ -517,8 +557,9 @@ function splitText(text, limit = 3800) {
       if (idx > cut) cut = idx + sep.length;
     }
     if (cut <= 0) cut = limit;
-    chunks.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
+    if (cut > 0 && /[\uD800-\uDBFF]/.test(rest[cut - 1]) && /[\uDC00-\uDFFF]/.test(rest[cut] || "")) cut--;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
   }
   if (rest) chunks.push(rest);
   return chunks.length ? chunks : [""];
@@ -526,20 +567,22 @@ function splitText(text, limit = 3800) {
 
 // 发送长文本：首段编辑占位消息，其余分条发送；headHtml 为可选的思考折叠块（仅加在首段）
 async function sendLongText(id, mid, rawText, env, headHtml = "") {
+  // 只发送正文；思考块不挤占正文，也不公开内部推理。
   const chunks = splitText(rawText, 3800);
   for (let i = 0; i < chunks.length; i++) {
-    const body = (i === 0 && headHtml ? headHtml : "") + esc(chunks[i]);
-    if (i === 0 && mid) await editMsgSimple(id, mid, body, env).catch(() => {});
-    else await sendMsg(id, body, env).catch(() => {});
+    if (!chunks[i]) continue;
+    const payload = { chat_id: id, text: chunks[i] }; // 纯文本，无 HTML 实体问题
+    if (i === 0 && mid) {
+      try { await telegram("editMessageText", { ...payload, message_id: mid }, env); }
+      catch (e) {
+        console.warn("Placeholder edit failed; sending new message", { message: e.message });
+        await telegram("sendMessage", payload, env);
+      }
+    } else await telegram("sendMessage", payload, env);
   }
 }
-
 async function sendMsg(id, text, env) {
-  const res = await fetch(`${TG_API}${env.TELEGRAM_TOKEN}/sendMessage`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: id, text, parse_mode: "HTML" })
-  });
-  return res.json();
+  return telegram("sendMessage", { chat_id: id, text, parse_mode: "HTML" }, env);
 }
 
 // ArrayBuffer → base64（分块，避免大文件栈溢出）
@@ -628,7 +671,7 @@ async function askBase(env, instruction, userText, convo) {
     ],
     max_tokens: 512
   });
-  return splitThink(res.response || "").answer.trim();
+  return splitThink(modelText(res)).answer.trim();
 }
 // 把历史压成简短对话背景（每条约 60 字，最多 4 条）
 function lastConvoText(history) {
@@ -682,41 +725,70 @@ function detectAudioFormat(buf) {
 
 // 把 TTS 响应统一转成 ArrayBuffer，兼容 Response / Stream / ArrayBuffer / Uint8Array / {audio|result.audio: base64} / base64 字符串
 async function audioToArrayBuffer(resp) {
-  let buf = null;
-
-  if (resp instanceof ArrayBuffer) buf = resp;
-  else if (ArrayBuffer.isView(resp)) buf = resp.buffer.slice(resp.byteOffset, resp.byteOffset + resp.byteLength);
-  else if (resp instanceof ReadableStream) buf = await new Response(resp).arrayBuffer();
-  else if (typeof Response !== "undefined" && resp instanceof Response) {
-    const ct = resp.headers.get("content-type") || "";
-    const ab = await resp.arrayBuffer();
-    if (ct.includes("json")) {
-      try { return await audioToArrayBuffer(JSON.parse(new TextDecoder().decode(ab))); } catch {}
-    }
-    buf = ab;
+  if (resp instanceof ArrayBuffer) return resp;
+  if (ArrayBuffer.isView(resp)) return resp.buffer.slice(resp.byteOffset, resp.byteOffset + resp.byteLength);
+  if (resp instanceof Response) {
+    if (!resp.ok) throw new Error(`TTS response ${resp.status}`);
+    if ((resp.headers.get("content-type") || "").includes("json")) return audioToArrayBuffer(await resp.json());
+    return audioToArrayBuffer(await resp.arrayBuffer());
   }
-  else if (resp?.arrayBuffer) buf = await resp.arrayBuffer();
-  else if (resp && typeof resp.audio === "string") return base64ToArrayBuffer(resp.audio);
-  else if (resp?.result && typeof resp.result.audio === "string") return base64ToArrayBuffer(resp.result.audio);
-  else if (resp && resp.audio != null) return await audioToArrayBuffer(resp.audio);
-  else if (typeof resp === "string") return base64ToArrayBuffer(resp);
-  else buf = await new Response(resp).arrayBuffer();
-
-  // 若拿到的不是可识别音频（例如是 base64 文本流），尝试按 base64 解码
-  if (!detectAudioFormat(buf)) {
-    const text = new TextDecoder().decode(new Uint8Array(buf)).trim();
-    if (text.length > 100 && /^[A-Za-z0-9+/=\s]+$/.test(text)) {
-      try {
-        const decoded = base64ToArrayBuffer(text);
-        if (detectAudioFormat(decoded)) return decoded;
-      } catch {}
-    }
+  if (resp instanceof ReadableStream) return audioToArrayBuffer(await new Response(resp).arrayBuffer());
+  if (typeof resp === "string") {
+    const trimmed = resp.trim();
+    if (trimmed.startsWith("{")) return audioToArrayBuffer(JSON.parse(trimmed));
+    return base64ToArrayBuffer(trimmed);
   }
-  return buf;
+  for (const candidate of [resp?.audio, resp?.result?.audio]) {
+    if (candidate != null) return audioToArrayBuffer(candidate);
+  }
+  if (resp && typeof resp.arrayBuffer === "function") return audioToArrayBuffer(await resp.arrayBuffer());
+  throw new Error("Unsupported TTS response; expected audio bytes or base64 audio");
 }
 
 // 音频是否有效：非空且是已知音频格式
 function isValidAudio(buf) {
   const b = new Uint8Array(buf);
   return b.length > 1024 && detectAudioFormat(b) !== null;
+}
+
+
+function modelText(res) {
+  const text = res?.choices?.[0]?.message?.content ?? res?.response ?? res?.text;
+  const reason = res?.choices?.[0]?.finish_reason ?? res?.finish_reason;
+  console.log("Model response", { finish_reason: reason ?? "unknown", usage: res?.usage, length: typeof text === "string" ? text.length : 0 });
+  if (typeof text !== "string") throw new Error("Unsupported model response");
+  return reason === "length" ? text + "\n\n⚠️ 回复达到生成长度上限，请让我继续。" : text;
+}
+
+function inspectAudio(buf) {
+  const fmt = detectAudioFormat(buf);
+  if (!fmt || buf.byteLength < 128) return { valid: false, reason: "没有可识别的音频数据" };
+  if (fmt.ext !== "wav") return { valid: true, format: fmt.ext, silenceChecked: false };
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  let format, channels, rate, bits, dataStart, dataLength;
+  const four = off => String.fromCharCode(...bytes.slice(off, off + 4));
+  for (let off = 12; off + 8 <= bytes.length;) {
+    const size = view.getUint32(off + 4, true);
+    const start = off + 8;
+    if (size > bytes.length - start) return { valid: false, reason: "WAV 数据不完整" };
+    if (four(off) === "fmt " && size >= 16) {
+      format = view.getUint16(start, true); channels = view.getUint16(start + 2, true);
+      rate = view.getUint32(start + 4, true); bits = view.getUint16(start + 14, true);
+    }
+    if (four(off) === "data") { dataStart = start; dataLength = size; }
+    off = start + size + (size % 2);
+  }
+  if (!dataLength || !channels || !rate || !bits) return { valid: false, reason: "WAV 缺少有效音轨" };
+  const duration = dataLength / (rate * channels * bits / 8);
+  if (duration < 0.1) return { valid: false, reason: "音频时长不足 0.1 秒" };
+  if (format === 1 && bits === 16) {
+    let energy = 0;
+    const count = Math.floor(dataLength / 2);
+    for (let i = 0; i < count; i++) { const sample = view.getInt16(dataStart + i * 2, true) / 32768; energy += sample * sample; }
+    const rms = Math.sqrt(energy / count);
+    if (rms < 0.0001) return { valid: false, reason: "音轨是静音", duration, rms };
+    return { valid: true, format: "wav", duration, rms, silenceChecked: true };
+  }
+  return { valid: true, format: "wav", duration, silenceChecked: false };
 }
